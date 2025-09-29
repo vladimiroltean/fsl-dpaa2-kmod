@@ -430,6 +430,10 @@ static void dpaa2_mac_remove(struct fsl_mc_device *mc_dev)
 	free_netdev(net_dev);
 }
 
+// disable to avoid conflict with eth
+#define DPAA2_MAC_AUTO_PROBE 0
+
+#if DPAA2_MAC_AUTO_PROBE
 static const struct fsl_mc_device_id dpaa2_mac_match_id_table[] = {
 	{
 		.vendor = FSL_MC_VENDOR_FREESCALE,
@@ -438,6 +442,7 @@ static const struct fsl_mc_device_id dpaa2_mac_match_id_table[] = {
 	{ .vendor = 0x0 }
 };
 MODULE_DEVICE_TABLE(fslmc, dpaa2_mac_match_id_table);
+#endif
 
 static struct fsl_mc_driver dpaa2_mac_driver = {
 	.driver = {
@@ -446,7 +451,9 @@ static struct fsl_mc_driver dpaa2_mac_driver = {
 	},
 	.probe = dpaa2_mac_probe,
 	.remove = dpaa2_mac_remove,
+#if DPAA2_MAC_AUTO_PROBE
 	.match_id_table = dpaa2_mac_match_id_table
+#endif
 };
 
 module_fsl_mc_driver(dpaa2_mac_driver);
