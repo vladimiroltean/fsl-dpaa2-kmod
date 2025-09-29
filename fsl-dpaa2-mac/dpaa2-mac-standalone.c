@@ -5,11 +5,20 @@
 #include <linux/property.h>
 #include <linux/fsl/mc.h>
 #include <linux/msi.h>
-#include "dpaa2-eth.h"
-#include "dpaa2-mac.h"
+
+#include <dpaa2-eth.h>
+#include <dpaa2-mac.h>
+
+#include "dpmac-extended.h"
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("Freescale DPAA2 MAC Driver");
+
+struct dpaa2_mac_standalone {
+	struct dpaa2_mac base;
+	struct ethtool_link_ksettings kset;
+	int phy_req_state;
+};
 
 struct dpaa2_mac_link_mode_map {
 	u64 dpmac_lm;
@@ -24,8 +33,16 @@ static const struct dpaa2_mac_link_mode_map dpaa2_mac_lm_map[] = {
 	{DPMAC_ADVERTISED_AUTONEG, ETHTOOL_LINK_MODE_Autoneg_BIT},
 };
 
+static inline struct dpaa2_mac_standalone *
+dpaa2_mac_to_spriv(struct dpaa2_mac *mac)
+{
+	return container_of(mac, struct dpaa2_mac_standalone, base);
+}
+
 static void dpaa2_mac_ksettings_change(struct dpaa2_mac *priv)
 {
+
+	struct dpaa2_mac_standalone *spriv = dpaa2_mac_to_spriv(priv);
 	struct fsl_mc_device *mc_dev = priv->mc_dev;
 	struct dpmac_link_cfg link_cfg = { 0 };
 	int err, i;
@@ -44,34 +61,35 @@ static void dpaa2_mac_ksettings_change(struct dpaa2_mac *priv)
 	if (!link_cfg.advertising)
 		return;
 
-	phylink_ethtool_ksettings_get(priv->phylink, &priv->kset);
+	phylink_ethtool_ksettings_get(priv->phylink, &spriv->kset);
 
-	priv->kset.base.speed = link_cfg.rate;
-	priv->kset.base.duplex = !!(link_cfg.options & DPMAC_LINK_OPT_HALF_DUPLEX);
+	spriv->kset.base.speed = link_cfg.rate;
+	spriv->kset.base.duplex = !!(link_cfg.options & DPMAC_LINK_OPT_HALF_DUPLEX);
 
-	ethtool_link_ksettings_zero_link_mode(&priv->kset, advertising);
+	ethtool_link_ksettings_zero_link_mode(&spriv->kset, advertising);
 	for (i = 0; i < ARRAY_SIZE(dpaa2_mac_lm_map); i++) {
 		if (link_cfg.advertising & dpaa2_mac_lm_map[i].dpmac_lm)
 			__set_bit(dpaa2_mac_lm_map[i].ethtool_lm,
-				  priv->kset.link_modes.advertising);
+				  spriv->kset.link_modes.advertising);
 	}
 
 	if (link_cfg.options & DPMAC_LINK_OPT_AUTONEG) {
-		priv->kset.base.autoneg = AUTONEG_ENABLE;
+		spriv->kset.base.autoneg = AUTONEG_ENABLE;
 		__set_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
-			  priv->kset.link_modes.advertising);
+			  spriv->kset.link_modes.advertising);
 	} else {
-		priv->kset.base.autoneg = AUTONEG_DISABLE;
+		spriv->kset.base.autoneg = AUTONEG_DISABLE;
 		__clear_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
-			    priv->kset.link_modes.advertising);
+			    spriv->kset.link_modes.advertising);
 	}
 
-	phylink_ethtool_ksettings_set(priv->phylink, &priv->kset);
+	phylink_ethtool_ksettings_set(priv->phylink, &spriv->kset);
 }
 
 static irqreturn_t dpaa2_mac_irq_handler(int irq_num, void *arg)
 {
 	struct device *dev = (struct device *)arg;
+	struct dpaa2_mac_standalone *spriv;
 	struct fsl_mc_device *dpmac_dev;
 	struct net_device *net_dev;
 	struct dpaa2_mac *priv;
@@ -80,7 +98,8 @@ static irqreturn_t dpaa2_mac_irq_handler(int irq_num, void *arg)
 
 	dpmac_dev = to_fsl_mc_device(dev);
 	net_dev = dev_get_drvdata(dev);
-	priv = netdev_priv(net_dev);
+	spriv = netdev_priv(net_dev);
+	priv = &spriv->base;
 
 	err = dpmac_get_irq_status(priv->mc_io, 0, dpmac_dev->mc_handle,
 				  DPMAC_IRQ_INDEX, &status);
@@ -94,15 +113,15 @@ static irqreturn_t dpaa2_mac_irq_handler(int irq_num, void *arg)
 		dpaa2_mac_ksettings_change(priv);
 
 	if (status & DPMAC_IRQ_EVENT_LINK_DOWN_REQ) {
-		if (priv->phy_req_state) {
+		if (spriv->phy_req_state) {
 			phylink_stop(priv->phylink);
-			priv->phy_req_state = 0;
+			spriv->phy_req_state = 0;
 		}
 	}
 
 	if (status & DPMAC_IRQ_EVENT_LINK_UP_REQ) {
-		if (!priv->phy_req_state) {
-			priv->phy_req_state = 1;
+		if (!spriv->phy_req_state) {
+			spriv->phy_req_state = 1;
 			phylink_start(priv->phylink);
 		}
 	}
@@ -175,30 +194,30 @@ static void dpaa2_mac_teardown_irqs(struct fsl_mc_device *mc_dev)
 
 static int dpaa2_mac_netdev_open(struct net_device *net_dev)
 {
-	struct dpaa2_mac *priv = netdev_priv(net_dev);
+	struct dpaa2_mac_standalone *spriv = netdev_priv(net_dev);
 
-	if (!dpaa2_mac_is_type_phy(priv))
+	if (!dpaa2_mac_is_type_phy(&spriv->base))
 		return 0;
 
-	if (priv->phy_req_state)
+	if (spriv->phy_req_state)
 		return 0;
 
-	priv->phy_req_state = 1;
-	phylink_start(priv->phylink);
+	spriv->phy_req_state = 1;
+	phylink_start(spriv->base.phylink);
 	return 0;
 }
 
 static int dpaa2_mac_netdev_stop(struct net_device *net_dev)
 {
-	struct dpaa2_mac *priv = netdev_priv(net_dev);
+	struct dpaa2_mac_standalone *spriv = netdev_priv(net_dev);
 
-	if (!dpaa2_mac_is_type_phy(priv))
+	if (!dpaa2_mac_is_type_phy(&spriv->base))
 		return 0;
-	if (!priv->phy_req_state)
+	if (!spriv->phy_req_state)
 		return 0;
 
-	priv->phy_req_state = 0;
-	phylink_stop(priv->phylink);
+	spriv->phy_req_state = 0;
+	phylink_stop(spriv->base.phylink);
 
 	return 0;
 }
@@ -298,6 +317,7 @@ static const struct ethtool_ops dpaa2_mac_ethtool_ops = {
 
 static int dpaa2_mac_probe(struct fsl_mc_device *mc_dev)
 {
+	struct dpaa2_mac_standalone *spriv;
 	struct device *dev = &mc_dev->dev;
 	struct fsl_mc_device *peer_dev;
 	struct net_device *net_dev;
@@ -314,16 +334,17 @@ static int dpaa2_mac_probe(struct fsl_mc_device *mc_dev)
 	if (!IS_ERR_OR_NULL(peer_dev) && peer_dev->dev.type == &fsl_mc_bus_dpsw_type)
 		return -EPROBE_DEFER;
 
-	net_dev = alloc_etherdev(sizeof(*priv));
+	net_dev = alloc_etherdev(sizeof(*spriv));
 	if (!net_dev) {
 		dev_err(dev, "alloc_etherdev error\n");
 		return -ENOMEM;
 	}
 
-	priv = netdev_priv(net_dev);
+	spriv = netdev_priv(net_dev);
+	priv = &spriv->base;
 	priv->mc_dev = mc_dev;
 	priv->net_dev = net_dev;
-	priv->phy_req_state = 0;
+	spriv->phy_req_state = 0;
 
 	SET_NETDEV_DEV(net_dev, dev);
 
