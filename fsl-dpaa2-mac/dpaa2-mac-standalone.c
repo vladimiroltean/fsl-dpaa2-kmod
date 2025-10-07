@@ -190,6 +190,7 @@ static void dpaa2_mac_teardown_irqs(struct fsl_mc_device *mc_dev)
 	fsl_mc_free_irqs(mc_dev);
 }
 
+#define CONFIG_FSL_DPAA2_MAC_NETDEVS 1
 #ifdef CONFIG_FSL_DPAA2_MAC_NETDEVS
 
 static int dpaa2_mac_netdev_open(struct net_device *net_dev)
