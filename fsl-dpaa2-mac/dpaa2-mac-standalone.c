@@ -114,7 +114,7 @@ static irqreturn_t dpaa2_mac_irq_handler(int irq_num, void *arg)
 
 	if (status & DPMAC_IRQ_EVENT_LINK_DOWN_REQ) {
 		if (spriv->phy_req_state) {
-			phylink_stop(priv->phylink);
+			dpaa2_mac_stop(&spriv->base);
 			spriv->phy_req_state = 0;
 		}
 	}
@@ -122,7 +122,7 @@ static irqreturn_t dpaa2_mac_irq_handler(int irq_num, void *arg)
 	if (status & DPMAC_IRQ_EVENT_LINK_UP_REQ) {
 		if (!spriv->phy_req_state) {
 			spriv->phy_req_state = 1;
-			phylink_start(priv->phylink);
+			dpaa2_mac_start(&spriv->base);
 		}
 	}
 	rtnl_unlock();
@@ -204,7 +204,7 @@ static int dpaa2_mac_netdev_open(struct net_device *net_dev)
 		return 0;
 
 	spriv->phy_req_state = 1;
-	phylink_start(spriv->base.phylink);
+	dpaa2_mac_start(&spriv->base);
 	return 0;
 }
 
@@ -218,7 +218,7 @@ static int dpaa2_mac_netdev_stop(struct net_device *net_dev)
 		return 0;
 
 	spriv->phy_req_state = 0;
-	phylink_stop(spriv->base.phylink);
+	dpaa2_mac_stop(&spriv->base);
 
 	return 0;
 }
